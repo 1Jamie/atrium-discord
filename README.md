@@ -1,6 +1,6 @@
 # atrium-discord
 
-Chat plugin for Atrium. It is not shipped inside Atrium. Atrium still provides `lib/discord_vault.js` and `lib/ghostty_runtime.js`; this plugin loads those from `ATRIUM_ROOT`.
+Chat plugin for Atrium. It is not shipped inside Atrium. It uses Atrium's generic helpers `lib/plugin_secret.js` (token file + keyring lookup) and `lib/ghostty_runtime.js` (`ghosttyEmbedArgs`) from `ATRIUM_ROOT`.
 
 Install into the user plugin directory (from an Atrium checkout, so `atrium-dev` is on the path):
 

@@ -17,22 +17,35 @@ function atriumLib(file) {
 }
 
 const {
-  readToken,
-  writeToken,
-  clearToken,
-  trySeedFromKeyring,
-} = atriumLib('discord_vault.js');
+  readSecret,
+  writeSecret,
+  clearSecret,
+  lookupKeyring,
+} = atriumLib('plugin_secret.js');
 const {
   ensureGhostty,
   readReadyBinary,
-  ghosttyLaunchArgs,
+  ghosttyEmbedArgs,
 } = atriumLib('ghostty_runtime.js');
 const { RemoteAuthSession, DESKTOP_UA_SHORT } = require('./remote_auth');
 
 const DISCORDO = path.join(os.homedir(), '.local', 'bin', 'discordo');
+const TOKEN_FILE = 'discord.token';
 const PREFLIGHT_MS = 1500;
 const EARLY_EXIT_MS = 3000;
-const APP_PANE_ID = 'plugin:discord-sidecar:app';
+
+function readToken() {
+  return readSecret(TOKEN_FILE);
+}
+function writeToken(token) {
+  writeSecret(TOKEN_FILE, token);
+}
+function clearToken() {
+  clearSecret(TOKEN_FILE);
+}
+function trySeedFromKeyring() {
+  return lookupKeyring({ service: 'discordo', username: 'token' });
+}
 
 function hostSpawn(bin, args) {
   if (fs.existsSync(bin)) {
@@ -71,7 +84,12 @@ function discordoLaunch(ghosttyBin) {
     return { command: 'ptyxis', args: ptyxisArgs };
   }
   if (ghosttyBin) {
-    return ghosttyLaunchArgs(ghosttyBin, DISCORDO);
+    return ghosttyEmbedArgs(ghosttyBin, DISCORDO, {
+      className: 'atrium-discordo',
+      background: '#080c14',
+      foreground: '#93c5fd',
+      cursor: '#60a5fa',
+    });
   }
   // Last resort if ensure failed and override wasn't set.
   const ptyxisArgs = ['-s', '--fullscreen', '-T', 'Discord', '--', DISCORDO];
@@ -128,6 +146,7 @@ async function activate(ctx) {
   let prepTabDisp = null;
   let ghosttyBin = readReadyBinary();
   let ghosttyEnsure = null;
+  let appPaneId = null;
 
   function sendAuth(channel, data) {
     ctx.ipc.send(channel, data);
@@ -268,8 +287,9 @@ async function activate(ctx) {
     const bin = await resolveGhosttyBin({ showUi: true });
     const launch = discordoLaunch(bin);
     ctx.log(`discord pane command: ${launch.command} ${launch.args.join(' ')}`);
-    // Geometry comes from the shell content slot via contribution reposition.
+    appPaneId = `plugin:discord-sidecar:app:${Date.now()}`;
     await ctx.createExternalPane('app', {
+      rawPaneId: appPaneId,
       command: launch.command,
       args: launch.args,
       env: spawnEnv(token),
@@ -424,7 +444,7 @@ async function activate(ctx) {
         return false;
       }
 
-      // Ensure Ghostty before selecting Chat so F9 doesn't flash an empty dock.
+      // Ghostty has to be ready before the Chat slot is selected.
       await resolveGhosttyBin({ showUi: true });
       await ensureChatDock(token);
       await ctx.shell.selectDockSlot('discord-sidecar:app');
@@ -453,48 +473,16 @@ async function activate(ctx) {
     }
   });
 
-  // F9 / dock: open Chat if vaulted, else auth tab.
-  ctx._onTogglePane = async (localId) => {
-    if (localId !== 'app' && localId !== 'auth' && localId !== 'prep') return;
-    const chatKey = 'discord-sidecar:app';
-    const authKey = 'discord-sidecar:auth';
-    if (localId === 'auth') {
-      await showAuthUi();
-      return;
-    }
-    if (localId === 'prep') {
-      await showPreparingUi();
-      beginGhosttyEnsure();
-      return;
-    }
-    const chatVisible =
-      ctx.shell.mode !== 'game' &&
-      ctx.shell.getDockSlot(chatKey) &&
-      ctx.getPane('app') &&
-      ctx.getPane('app').visible;
-    const authVisible = ctx.getPane('auth') && ctx.getPane('auth').visible;
-    const prepVisible = ctx.getPane('prep') && ctx.getPane('prep').visible;
-    if (chatVisible || authVisible || prepVisible) {
-      if (ctx.getPane('app')) ctx.getPane('app').setVisible(false);
-      stopAuthSession();
-      if (ctx.getPane('auth')) ctx.getPane('auth').setVisible(false);
-      if (ctx.getPane('prep')) ctx.getPane('prep').setVisible(false);
-      return;
-    }
-    await ensureDiscord();
-  };
-
   // Background ensure on plugin init — does not await, does not block game.
   beginGhosttyEnsure();
 
-  // Pre-register Chat dock when token already exists so F9 / dock work immediately.
-  // Pane spawn still waits on Ghostty inside ensure().
+  // Pre-register Chat when a token is already stored. Spawn still waits on Ghostty.
   if (readToken()) {
     ensureChatDock(readToken()).catch((e) => ctx.log('chat dock seed failed:', e.message));
   }
 
   const onExternalExit = (payload) => {
-    if (!payload || (payload.pane_id !== APP_PANE_ID && payload.pane_id !== 'app')) return;
+    if (!payload || !appPaneId || payload.pane_id !== appPaneId) return;
     if (suppressExitHandler) return;
     const life = Number(payload.lifetime_ms) || 0;
     const code = Number(payload.code);
